@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
 import { useAuth } from "@/lib/auth-context"
-import { useExchanges } from "@/lib/exchanges-context"
+import { useExchanges, type Exchange } from "@/lib/exchanges-context"
 import { useToast } from "@/hooks/use-toast"
 import { ArrowLeftRight, Clock, CheckCircle2, XCircle, AlertCircle, Calendar, Package, Repeat } from "lucide-react"
 
@@ -41,10 +41,10 @@ export default function ExchangesPage() {
     return null
   }
 
-  const incomingProposals = getIncomingProposals(user.id)
-  const outgoingProposals = getOutgoingProposals(user.id)
-  const pendingConfirmations = getPendingConfirmations(user.id)
-  const completedExchanges = getCompletedExchanges(user.id)
+  const incomingProposals: Exchange[] = getIncomingProposals(user.id)
+  const outgoingProposals: Exchange[] = getOutgoingProposals(user.id)
+  const pendingConfirmations: Exchange[] = getPendingConfirmations(user.id)
+  const completedExchanges: Exchange[] = getCompletedExchanges(user.id)
 
   const handleAccept = async (exchangeId: string) => {
     try {
@@ -80,7 +80,7 @@ export default function ExchangesPage() {
 
   const handleConfirm = async (exchangeId: string) => {
     try {
-      await confirmExchange(exchangeId, user.id)
+      await confirmExchange(exchangeId)
       toast({
         title: "Intercambio confirmado",
         description: "Has confirmado el intercambio exitosamente",

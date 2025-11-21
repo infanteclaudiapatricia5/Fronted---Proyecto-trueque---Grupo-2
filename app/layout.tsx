@@ -3,6 +3,7 @@ import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import { Analytics } from "@vercel/analytics/next"
 import { ThemeProvider } from "@/components/theme-provider"
+import { RecaptchaProvider } from "@/components/recaptcha-provider"
 import { AuthProvider } from "@/lib/auth-context"
 import { OffersProvider } from "@/lib/offers-context"
 import { ExchangesProvider } from "@/lib/exchanges-context"
@@ -26,17 +27,19 @@ export default function RootLayout({
   return (
     <html lang="es" suppressHydrationWarning>
       <body className={`font-sans antialiased`}>
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          <AuthProvider>
-            <OffersProvider>
-              <ExchangesProvider>
-                {children}
-                <Toaster />
-                <Analytics />
-              </ExchangesProvider>
-            </OffersProvider>
-          </AuthProvider>
-        </ThemeProvider>
+        <RecaptchaProvider>
+          <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+            <AuthProvider>
+              <OffersProvider>
+                <ExchangesProvider>
+                  {children}
+                  <Toaster />
+                  <Analytics />
+                </ExchangesProvider>
+              </OffersProvider>
+            </AuthProvider>
+          </ThemeProvider>
+        </RecaptchaProvider>
       </body>
     </html>
   )

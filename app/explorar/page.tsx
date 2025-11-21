@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { Navbar } from "@/components/navbar"
 import { AISearch } from "@/components/ai-search"
 import { OfferCard } from "@/components/offer-card"
@@ -9,86 +9,64 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { MapPin, SlidersHorizontal } from "lucide-react"
-
-const categories = [
-  { id: "all", name: "Todas", count: 2543 },
-  { id: "electronics", name: "Electrónica", count: 456 },
-  { id: "home", name: "Hogar y Jardín", count: 789 },
-  { id: "sports", name: "Deportes", count: 234 },
-  { id: "books", name: "Libros", count: 567 },
-  { id: "clothing", name: "Ropa y Accesorios", count: 345 },
-  { id: "toys", name: "Juguetes", count: 152 },
-]
+import { MapPin, SlidersHorizontal, Loader2 } from "lucide-react"
+import { useOffers } from "@/lib/offers-context"
 
 const conditions = [
   { id: "all", name: "Todas" },
-  { id: "new", name: "Nuevo" },
-  { id: "like-new", name: "Como Nuevo" },
-  { id: "good", name: "Buen Estado" },
-  { id: "used", name: "Usado" },
-]
-
-const allOffers = [
-  {
-    id: "1",
-    title: "Laptop Gaming MSI",
-    description:
-      "Laptop gaming de alto rendimiento, RTX 3060, 16GB RAM, perfecto estado. Busco cambiar por MacBook Pro.",
-    category: "Electrónica",
-    image: "/macbook-pro-laptop.png",
-    location: "Bogotá",
-    timeAgo: "Hace 2 horas",
-    userName: "Juan Martínez",
-    userRating: 4.8,
-    condition: "new",
-    badge: "NUEVO",
-  },
-  {
-    id: "2",
-    title: "Bicicleta de Montaña Trek",
-    description: "Bicicleta Trek X-Caliber 8, rodada 29, suspensión delantera. Poco uso, excelente para trails.",
-    category: "Deportes",
-    image: "/mountain-bike-bicycle.jpg",
-    location: "Medellín",
-    timeAgo: "Hace 5 horas",
-    userName: "Ana López",
-    userRating: 4.9,
-    condition: "like-new",
-    badge: "POPULAR",
-  },
-  {
-    id: "3",
-    title: "Cámara Canon EOS R6",
-    description: "Cámara mirrorless profesional con lente 24-105mm. Poco uso.",
-    category: "Fotografía",
-    image: "/canon-camera-professional.jpg",
-    location: "Cali",
-    timeAgo: "Hace 1 día",
-    userName: "Luis Rodríguez",
-    userRating: 5.0,
-    condition: "new",
-    badge: "NUEVO",
-  },
-  {
-    id: "4",
-    title: "Guitarra Eléctrica Fender",
-    description: "Fender Stratocaster American Standard, color sunburst.",
-    category: "Música",
-    image: "/fender-stratocaster-guitar.jpg",
-    location: "Barranquilla",
-    timeAgo: "Hace 3 horas",
-    userName: "María López",
-    userRating: 4.7,
-    condition: "good",
-  },
+  { id: "Nuevo", name: "Nuevo" },
+  { id: "Excelente", name: "Excelente" },
+  { id: "Bueno", name: "Bueno" },
+  { id: "Regular", name: "Regular" },
 ]
 
 export default function ExplorarPage() {
+  const { offers, categories, isLoading, getPublishedOffers } = useOffers()
   const [selectedCategories, setSelectedCategories] = useState<string[]>(["all"])
   const [selectedCondition, setSelectedCondition] = useState("all")
   const [selectedLocation, setSelectedLocation] = useState("all")
   const [showFilters, setShowFilters] = useState(true)
+
+  const publishedOffers = getPublishedOffers()
+
+  const categoriesWithCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    publishedOffers.forEach((offer) => {
+      const catId = offer.categoryId || "unknown"
+      counts.set(catId, (counts.get(catId) || 0) + 1)
+    })
+    
+    return [
+      { id: "all", name: "Todas", count: publishedOffers.length },
+      ...categories.map((cat) => ({
+        id: cat.id,
+        name: cat.name,
+        count: counts.get(cat.id) || 0,
+      })),
+    ]
+  }, [categories, publishedOffers])
+
+  const filteredOffers = useMemo(() => {
+    let filtered = publishedOffers
+
+    if (!selectedCategories.includes("all")) {
+      filtered = filtered.filter((offer) => 
+        offer.categoryId && selectedCategories.includes(offer.categoryId)
+      )
+    }
+
+    if (selectedCondition !== "all") {
+      filtered = filtered.filter((offer) => offer.condition === selectedCondition)
+    }
+
+    if (selectedLocation !== "all") {
+      filtered = filtered.filter((offer) => 
+        offer.location.toLowerCase().includes(selectedLocation.toLowerCase())
+      )
+    }
+
+    return filtered
+  }, [publishedOffers, selectedCategories, selectedCondition, selectedLocation])
 
   const handleCategoryChange = (categoryId: string) => {
     if (categoryId === "all") {
@@ -102,6 +80,18 @@ export default function ExplorarPage() {
         setSelectedCategories([...newCategories, categoryId])
       }
     }
+  }
+
+  const formatTimeAgo = (dateString: string) => {
+    const now = new Date()
+    const created = new Date(dateString)
+    const diffMs = now.getTime() - created.getTime()
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
+    const diffDays = Math.floor(diffHours / 24)
+
+    if (diffDays > 0) return `Hace ${diffDays} día${diffDays > 1 ? 's' : ''}`
+    if (diffHours > 0) return `Hace ${diffHours} hora${diffHours > 1 ? 's' : ''}`
+    return 'Hace poco'
   }
 
   return (
@@ -134,7 +124,7 @@ export default function ExplorarPage() {
               <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
                 <h3 className="font-semibold text-lg mb-4">Categorías</h3>
                 <div className="space-y-3">
-                  {categories.map((category) => (
+                  {categoriesWithCounts.map((category) => (
                     <div key={category.id} className="flex items-center justify-between">
                       <div className="flex items-center space-x-2">
                         <Checkbox
@@ -206,7 +196,7 @@ export default function ExplorarPage() {
             <div className="flex items-center justify-between mb-6">
               <div>
                 <h2 className="text-2xl font-bold">Productos Disponibles</h2>
-                <p className="text-muted-foreground">{allOffers.length} productos encontrados</p>
+                <p className="text-muted-foreground">{filteredOffers.length} productos encontrados</p>
               </div>
               <Button
                 variant="outline"
@@ -219,17 +209,37 @@ export default function ExplorarPage() {
               </Button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {allOffers.map((offer, index) => (
-                <div
-                  key={offer.id}
-                  className="animate-in fade-in slide-in-from-bottom-4"
-                  style={{ animationDelay: `${index * 50}ms`, animationFillMode: "backwards" }}
-                >
-                  <OfferCard {...offer} />
-                </div>
-              ))}
-            </div>
+            {isLoading ? (
+              <div className="flex items-center justify-center py-20">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+            ) : filteredOffers.length === 0 ? (
+              <div className="text-center py-20">
+                <p className="text-muted-foreground text-lg">No se encontraron ofertas</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {filteredOffers.map((offer, index) => (
+                  <div
+                    key={offer.id}
+                    className="animate-in fade-in slide-in-from-bottom-4"
+                    style={{ animationDelay: `${index * 50}ms`, animationFillMode: "backwards" }}
+                  >
+                    <OfferCard
+                      id={offer.id}
+                      title={offer.title}
+                      category={offer.category}
+                      image={offer.images[0] || "/placeholder.svg"}
+                      location={offer.location}
+                      timeAgo={formatTimeAgo(offer.createdAt)}
+                      userName={offer.userName}
+                      userAvatar={offer.userAvatar}
+                      userRating={offer.userRating}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
           </main>
         </div>
       </div>

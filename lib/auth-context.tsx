@@ -1,6 +1,7 @@
 "use client"
 
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
+import { apiFetch } from "@/lib/api-client"
 
 interface User {
   id: string
@@ -9,73 +10,163 @@ interface User {
   avatar?: string
   reputation: number
   joinedDate: string
+  location?: string | null
+  bio?: string | null
 }
 
 interface AuthContextType {
   user: User | null
-  login: (email: string, password: string) => Promise<void>
-  signup: (email: string, password: string, name: string) => Promise<void>
+  token: string | null
+  login: (email: string, password: string, recaptchaToken: string) => Promise<void>
+  signup: (email: string, password: string, name: string, recaptchaToken: string) => Promise<void>
+  verifyEmail: (email: string, code: string) => Promise<void>
   logout: () => void
   isLoading: boolean
+  refreshProfile: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
+const STORAGE_KEY = "truequehub_user"
+const TOKEN_KEY = "truequehub_token"
+const avatarFromEmail = (email: string) => `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(email)}`
+
+interface LoginResponse {
+  token: string
+  user: {
+    id: string
+    email: string
+    name: string
+  }
+}
+
+interface ProfileResponse {
+  id: string
+  email: string
+  name: string
+  location?: string | null
+  bio?: string | null
+  reputationScore?: number
+  tradesClosed?: number
+  active?: boolean
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
+  const [token, setToken] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
-  useEffect(() => {
-    // Check for stored user on mount
-    const storedUser = localStorage.getItem("truequehub_user")
-    if (storedUser) {
-      setUser(JSON.parse(storedUser))
-    }
-    setIsLoading(false)
-  }, [])
-
-  const login = async (email: string, password: string) => {
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-
-    // Mock user data
-    const mockUser: User = {
-      id: "1",
-      email,
-      name: email.split("@")[0],
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`,
-      reputation: 4.8,
+  const persistSession = (tokenValue: string, profile: ProfileResponse) => {
+    const hydratedUser: User = {
+      id: profile.id,
+      email: profile.email,
+      name: profile.name || profile.email.split("@")[0],
+      avatar: avatarFromEmail(profile.email),
+      reputation: profile.reputationScore ?? 4.5,
       joinedDate: new Date().toISOString(),
+      location: profile.location ?? null,
+      bio: profile.bio ?? null,
     }
 
-    setUser(mockUser)
-    localStorage.setItem("truequehub_user", JSON.stringify(mockUser))
+    setUser(hydratedUser)
+    setToken(tokenValue)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(hydratedUser))
+    localStorage.setItem(TOKEN_KEY, tokenValue)
   }
 
-  const signup = async (email: string, password: string, name: string) => {
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-
-    // Mock user data
-    const mockUser: User = {
-      id: Math.random().toString(36).substr(2, 9),
-      email,
-      name,
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`,
-      reputation: 5.0,
-      joinedDate: new Date().toISOString(),
+  const logout = useCallback(() => {
+    if (token) {
+      apiFetch("/auth/logout", {
+        method: "POST",
+        token,
+        skipJson: true,
+      }).catch((error) => console.warn("logout error", error))
     }
 
-    setUser(mockUser)
-    localStorage.setItem("truequehub_user", JSON.stringify(mockUser))
-  }
-
-  const logout = () => {
     setUser(null)
-    localStorage.removeItem("truequehub_user")
+    setToken(null)
+    localStorage.removeItem(STORAGE_KEY)
+    localStorage.removeItem(TOKEN_KEY)
+  }, [token])
+
+  const refreshProfile = useCallback(async (tokenOverride?: string) => {
+    const effectiveToken = tokenOverride || token
+    if (!effectiveToken) {
+      setIsLoading(false)
+      return
+    }
+
+    try {
+      const profile = await apiFetch<ProfileResponse>("/users/profile", {
+        method: "GET",
+        token: effectiveToken,
+      })
+      persistSession(effectiveToken, profile)
+    } catch (error: any) {
+      if (error?.status === 401) {
+        console.warn("Token inválido o expirado, limpiando sesión")
+      } else {
+        console.error("Error fetching profile", error)
+      }
+      logout()
+    } finally {
+      setIsLoading(false)
+    }
+  }, [token, logout])
+
+  useEffect(() => {
+    const storedUser = localStorage.getItem(STORAGE_KEY)
+    const storedToken = localStorage.getItem(TOKEN_KEY)
+    if (storedUser) {
+      try {
+        setUser(JSON.parse(storedUser))
+      } catch (error) {
+        localStorage.removeItem(STORAGE_KEY)
+      }
+    }
+    if (storedToken) {
+      setToken(storedToken)
+      refreshProfile(storedToken)
+    } else {
+      setIsLoading(false)
+    }
+  }, [refreshProfile])
+
+  const login = async (email: string, password: string, recaptchaToken: string) => {
+    const response = await apiFetch<LoginResponse>("/auth/login", {
+      method: "POST",
+      body: { email, password, recaptchaToken },
+    })
+    await refreshProfile(response.token)
   }
 
-  return <AuthContext.Provider value={{ user, login, signup, logout, isLoading }}>{children}</AuthContext.Provider>
+  const signup = async (email: string, password: string, name: string, recaptchaToken: string) => {
+    await apiFetch("/auth/register", {
+      method: "POST",
+      body: {
+        email,
+        password,
+        name,
+        recaptchaToken,
+      },
+    })
+  }
+
+  const verifyEmail = async (email: string, code: string) => {
+    await apiFetch("/auth/verify-email", {
+      method: "POST",
+      body: {
+        email,
+        code,
+      },
+    })
+  }
+
+  return (
+    <AuthContext.Provider value={{ user, token, login, signup, verifyEmail, logout, isLoading, refreshProfile }}>
+      {children}
+    </AuthContext.Provider>
+  )
 }
 
 export function useAuth() {

@@ -9,17 +9,21 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
-import { Package, Loader2, Mail, Lock, UserIcon, ArrowLeft } from "lucide-react"
+import { Package, Loader2, Mail, Lock, UserIcon, ArrowLeft, KeyRound } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { useToast } from "@/hooks/use-toast"
+import { useRecaptcha } from "@/hooks/use-recaptcha"
 
 export default function SignupPage() {
+  const [step, setStep] = useState<"register" | "verify">("register")
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
+  const [verificationCode, setVerificationCode] = useState("")
   const [isLoading, setIsLoading] = useState(false)
-  const { signup } = useAuth()
+  const { signup, verifyEmail, login } = useAuth()
+  const { getToken } = useRecaptcha()
   const router = useRouter()
   const { toast } = useToast()
 
@@ -47,16 +51,52 @@ export default function SignupPage() {
     setIsLoading(true)
 
     try {
-      await signup(email, password, name)
+      const recaptchaToken = await getToken("signup")
+      await signup(email, password, name, recaptchaToken)
       toast({
-        title: "¡Cuenta creada!",
-        description: "Tu cuenta ha sido creada exitosamente.",
+        title: "¡Registro exitoso!",
+        description: "Se ha enviado un código de verificación a tu correo.",
       })
-      router.push("/dashboard")
+      setStep("verify")
     } catch (error) {
       toast({
         title: "Error al crear cuenta",
         description: "Por favor intenta nuevamente.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleVerification = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!verificationCode || verificationCode.length < 4) {
+      toast({
+        title: "Error",
+        description: "Por favor ingresa un código válido.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsLoading(true)
+
+    try {
+      await verifyEmail(email, verificationCode)
+      // Después de verificar, hacer login automático
+      const recaptchaToken = await getToken("login")
+      await login(email, password, recaptchaToken)
+      toast({
+        title: "¡Email verificado!",
+        description: "Tu cuenta ha sido activada exitosamente.",
+      })
+      router.push("/dashboard")
+    } catch (error) {
+      toast({
+        title: "Error de verificación",
+        description: "El código ingresado es incorrecto. Por favor intenta nuevamente.",
         variant: "destructive",
       })
     } finally {
@@ -92,11 +132,19 @@ export default function SignupPage() {
               </span>
             </Link>
           </div>
-          <CardTitle className="text-2xl font-bold">Crear Cuenta</CardTitle>
-          <CardDescription>Únete a la comunidad de intercambios más grande</CardDescription>
+          <CardTitle className="text-2xl font-bold">
+            {step === "register" ? "Crear Cuenta" : "Verificar Email"}
+          </CardTitle>
+          <CardDescription>
+            {step === "register"
+              ? "Únete a la comunidad de intercambios más grande"
+              : `Ingresa el código enviado a ${email}`}
+          </CardDescription>
         </CardHeader>
-        <form onSubmit={handleSubmit}>
-          <CardContent className="space-y-4">
+
+        {step === "register" ? (
+          <form onSubmit={handleSubmit}>
+            <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="name">Nombre Completo</Label>
               <div className="relative">
@@ -170,6 +218,28 @@ export default function SignupPage() {
               )}
             </Button>
 
+            <p className="text-xs text-center text-muted-foreground">
+              Este sitio está protegido por reCAPTCHA y aplican la{" "}
+              <a
+                href="https://policies.google.com/privacy"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                Política de Privacidad
+              </a>{" "}
+              y los{" "}
+              <a
+                href="https://policies.google.com/terms"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                Términos de Servicio
+              </a>{" "}
+              de Google.
+            </p>
+
             <div className="relative w-full">
               <div className="absolute inset-0 flex items-center">
                 <span className="w-full border-t border-border" />
@@ -217,6 +287,62 @@ export default function SignupPage() {
             </Link>
           </CardFooter>
         </form>
+        ) : (
+          <form onSubmit={handleVerification}>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="verificationCode">Código de Verificación</Label>
+                <div className="relative">
+                  <KeyRound className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="verificationCode"
+                    type="text"
+                    placeholder="123456"
+                    value={verificationCode}
+                    onChange={(e) => setVerificationCode(e.target.value)}
+                    className="pl-10 text-center text-lg tracking-widest"
+                    required
+                    maxLength={6}
+                    autoFocus
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground text-center mt-2">
+                  Revisa tu bandeja de entrada y spam
+                </p>
+              </div>
+            </CardContent>
+            <CardFooter className="flex flex-col space-y-4">
+              <Button type="submit" className="w-full" disabled={isLoading}>
+                {isLoading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Verificando...
+                  </>
+                ) : (
+                  "Verificar y Continuar"
+                )}
+              </Button>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => setStep("register")}
+                disabled={isLoading}
+              >
+                Volver al registro
+              </Button>
+
+              <Link
+                href="/"
+                className="flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Volver al inicio
+              </Link>
+            </CardFooter>
+          </form>
+        )}
       </Card>
     </div>
   )

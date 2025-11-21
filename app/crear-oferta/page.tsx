@@ -14,27 +14,28 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useAuth } from "@/lib/auth-context"
 import { useOffers } from "@/lib/offers-context"
 import { useToast } from "@/hooks/use-toast"
+import { validateFiles, formatFileSize, MAX_FILE_SIZE } from "@/lib/file-validation"
 import { Loader2, Upload, X, ArrowLeft } from "lucide-react"
 import Link from "next/link"
-
-const categories = ["Tecnología", "Deportes", "Fotografía", "Música", "Hogar", "Moda", "Libros", "Juguetes", "Otros"]
 
 const conditions = ["Nuevo", "Excelente", "Bueno", "Regular"]
 
 export default function CreateOfferPage() {
   const router = useRouter()
   const { user } = useAuth()
-  const { createOffer } = useOffers()
+  const { createOffer, categories } = useOffers()
   const { toast } = useToast()
 
   const [isLoading, setIsLoading] = useState(false)
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
-  const [category, setCategory] = useState("")
+  const [categoryId, setCategoryId] = useState("")
   const [condition, setCondition] = useState("")
-  const [location, setLocation] = useState("")
-  const [images, setImages] = useState<string[]>([])
-  const [status, setStatus] = useState<"draft" | "published">("draft")
+  const [locationLabel, setLocationLabel] = useState("")
+  const [latitude, setLatitude] = useState<number>(4.7110)
+  const [longitude, setLongitude] = useState<number>(-74.0721)
+  const [imageFiles, setImageFiles] = useState<File[]>([])
+  const [imagePreviews, setImagePreviews] = useState<string[]>([])
 
   useEffect(() => {
     if (!user) {
@@ -42,21 +43,80 @@ export default function CreateOfferPage() {
     }
   }, [user, router])
 
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setLatitude(position.coords.latitude)
+          setLongitude(position.coords.longitude)
+        },
+        (error) => {
+          console.log("Geolocation error:", error)
+        }
+      )
+    }
+  }, [])
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (files) {
-      // In a real app, you would upload to a server
-      // For now, we'll use placeholder images
-      const newImages = Array.from(files).map((file) => `/placeholder.svg?height=400&width=600&query=${file.name}`)
-      setImages([...images, ...newImages])
+      const fileArray = Array.from(files)
+      const remainingSlots = 3 - imageFiles.length
+      
+      const validation = validateFiles(fileArray)
+      
+      if (validation.oversizedFiles.length > 0) {
+        const fileNames = validation.oversizedFiles.map(f => f.name).join(", ")
+        toast({
+          title: "Archivos demasiado grandes",
+          description: `Las siguientes imágenes superan los ${formatFileSize(MAX_FILE_SIZE)}: ${fileNames}`,
+          variant: "destructive",
+        })
+      }
+      
+      if (validation.invalidTypeFiles.length > 0) {
+        toast({
+          title: "Tipo de archivo inválido",
+          description: "Solo se permiten imágenes (JPG, PNG, GIF, WebP)",
+          variant: "destructive",
+        })
+      }
+      
+      if (validation.hasErrors) {
+        e.target.value = ""
+        return
+      }
+      
+      const filesToAdd = validation.validFiles.slice(0, remainingSlots)
+
+      if (filesToAdd.length < validation.validFiles.length) {
+        toast({
+          title: "Límite de imágenes",
+          description: "Solo puedes subir máximo 3 imágenes",
+          variant: "destructive",
+        })
+      }
+
+      setImageFiles([...imageFiles, ...filesToAdd])
+      
+      filesToAdd.forEach((file) => {
+        const reader = new FileReader()
+        reader.onloadend = () => {
+          setImagePreviews((prev) => [...prev, reader.result as string])
+        }
+        reader.readAsDataURL(file)
+      })
+      
+      e.target.value = ""
     }
   }
 
   const removeImage = (index: number) => {
-    setImages(images.filter((_, i) => i !== index))
+    setImageFiles(imageFiles.filter((_, i) => i !== index))
+    setImagePreviews(imagePreviews.filter((_, i) => i !== index))
   }
 
-  const handleSubmit = async (e: React.FormEvent, submitStatus: "draft" | "published") => {
+  const handleSubmit = async (e: React.FormEvent, publish: boolean) => {
     e.preventDefault()
 
     if (!user) {
@@ -68,7 +128,7 @@ export default function CreateOfferPage() {
       return
     }
 
-    if (!title || !description || !category || !condition || !location) {
+    if (!title || !description || !categoryId || !condition || !locationLabel) {
       toast({
         title: "Error",
         description: "Por favor completa todos los campos requeridos.",
@@ -77,27 +137,50 @@ export default function CreateOfferPage() {
       return
     }
 
+    if (imageFiles.length === 0) {
+      toast({
+        title: "Error",
+        description: "Debes subir al menos una imagen.",
+        variant: "destructive",
+      })
+      return
+    }
+
     setIsLoading(true)
 
     try {
-      const offerId = await createOffer({
+      const imagePromises = imageFiles.map((file) => {
+        return new Promise<{ base64: string; nombre: string }>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onloadend = () => {
+            resolve({
+              base64: reader.result as string,
+              nombre: file.name,
+            })
+          }
+          reader.onerror = reject
+          reader.readAsDataURL(file)
+        })
+      })
+
+      const images = await Promise.all(imagePromises)
+
+      await createOffer({
         title,
         description,
-        category,
         condition,
-        location,
-        images: images.length > 0 ? images : ["/diverse-products-still-life.png"],
-        userId: user.id,
-        userName: user.name,
-        userAvatar: user.avatar,
-        userRating: user.reputation,
-        status: submitStatus,
+        categoryId,
+        locationLabel,
+        latitude,
+        longitude,
+        images,
+        publish,
       })
 
       toast({
-        title: submitStatus === "published" ? "¡Oferta publicada!" : "Borrador guardado",
+        title: publish ? "¡Oferta publicada!" : "Borrador guardado",
         description:
-          submitStatus === "published"
+          publish
             ? "Tu oferta ha sido publicada exitosamente."
             : "Tu oferta ha sido guardada como borrador.",
       })
@@ -175,14 +258,14 @@ export default function CreateOfferPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="category">Categoría *</Label>
-                    <Select value={category} onValueChange={setCategory}>
+                    <Select value={categoryId} onValueChange={setCategoryId}>
                       <SelectTrigger id="category">
                         <SelectValue placeholder="Selecciona una categoría" />
                       </SelectTrigger>
                       <SelectContent>
                         {categories.map((cat) => (
-                          <SelectItem key={cat} value={cat}>
-                            {cat}
+                          <SelectItem key={cat.id} value={cat.id}>
+                            {cat.name}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -211,10 +294,13 @@ export default function CreateOfferPage() {
                   <Input
                     id="location"
                     placeholder="Ej: Ciudad de México"
-                    value={location}
-                    onChange={(e) => setLocation(e.target.value)}
+                    value={locationLabel}
+                    onChange={(e) => setLocationLabel(e.target.value)}
                     required
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Coordenadas: {latitude.toFixed(4)}, {longitude.toFixed(4)}
+                  </p>
                 </div>
 
                 <div className="space-y-2">
@@ -231,16 +317,16 @@ export default function CreateOfferPage() {
                     <label htmlFor="images" className="cursor-pointer">
                       <Upload className="h-10 w-10 mx-auto mb-2 text-muted-foreground" />
                       <p className="text-sm text-muted-foreground">Haz clic para subir imágenes o arrastra y suelta</p>
-                      <p className="text-xs text-muted-foreground mt-1">PNG, JPG hasta 5MB</p>
+                      <p className="text-xs text-muted-foreground mt-1">PNG, JPG, GIF, WebP • Máximo 5MB por imagen • Hasta 3 imágenes</p>
                     </label>
                   </div>
 
-                  {images.length > 0 && (
+                  {imagePreviews.length > 0 && (
                     <div className="grid grid-cols-3 gap-4 mt-4">
-                      {images.map((image, index) => (
+                      {imagePreviews.map((preview, index) => (
                         <div key={index} className="relative group">
                           <img
-                            src={image || "/placeholder.svg"}
+                            src={preview}
                             alt={`Preview ${index + 1}`}
                             className="w-full h-32 object-cover rounded-lg"
                           />
@@ -264,10 +350,10 @@ export default function CreateOfferPage() {
                     type="button"
                     variant="outline"
                     className="flex-1 bg-transparent"
-                    onClick={(e) => handleSubmit(e, "draft")}
+                    onClick={(e) => handleSubmit(e, false)}
                     disabled={isLoading}
                   >
-                    {isLoading && status === "draft" ? (
+                    {isLoading ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         Guardando...
@@ -279,10 +365,10 @@ export default function CreateOfferPage() {
                   <Button
                     type="button"
                     className="flex-1"
-                    onClick={(e) => handleSubmit(e, "published")}
+                    onClick={(e) => handleSubmit(e, true)}
                     disabled={isLoading}
                   >
-                    {isLoading && status === "published" ? (
+                    {isLoading ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         Publicando...

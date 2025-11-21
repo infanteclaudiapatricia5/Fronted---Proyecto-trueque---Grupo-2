@@ -1,7 +1,9 @@
 "use client"
 
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
-import type { Offer } from "./offers-context"
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, type ReactNode } from "react"
+import { apiFetch } from "@/lib/api-client"
+import { useAuth } from "@/lib/auth-context"
+import { useOffers, type Offer } from "@/lib/offers-context"
 
 export type ExchangeStatus = "pending" | "accepted" | "rejected" | "completed" | "cancelled"
 
@@ -31,10 +33,12 @@ export interface Exchange {
 
 interface ExchangesContextType {
   exchanges: Exchange[]
+  isLoading: boolean
+  refreshExchanges: () => Promise<void>
   proposeExchange: (offerAId: string, offerBId: string, message?: string) => Promise<string>
   acceptProposal: (exchangeId: string) => Promise<void>
   rejectProposal: (exchangeId: string) => Promise<void>
-  confirmExchange: (exchangeId: string, userId: string) => Promise<void>
+  confirmExchange: (exchangeId: string) => Promise<void>
   cancelExchange: (exchangeId: string) => Promise<void>
   getUserExchanges: (userId: string) => Exchange[]
   getIncomingProposals: (userId: string) => Exchange[]
@@ -45,161 +49,287 @@ interface ExchangesContextType {
 
 const ExchangesContext = createContext<ExchangesContextType | undefined>(undefined)
 
+type BackendTrade = {
+  _id?: string
+  id?: string
+  proposerId: string
+  responderId: string
+  proposerOfferJson: any
+  responderOfferJson: any
+  proposerConfirmed?: boolean
+  responderConfirmed?: boolean
+  status: string
+  message?: string
+  createdAt?: string
+  updatedAt?: string
+  closedAt?: string
+}
+
+const backendStatusMap: Record<string, ExchangeStatus> = {
+  PENDING: "pending",
+  CONFIRMED: "completed",
+  CANCELLED: "cancelled",
+}
+
+const parseOfferSnapshot = (raw: any) => {
+  if (!raw) return {}
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw)
+    } catch (error) {
+      return {}
+    }
+  }
+  return raw
+}
+
+const pickSnapshotFallback = (snapshot: any, fallback?: Offer) => {
+  const firstImage = snapshot?.image || snapshot?.images?.[0] || fallback?.images?.[0] || "/placeholder.svg"
+  return {
+    id: snapshot?.offerId || snapshot?.id || fallback?.id || "",
+    title: snapshot?.title || fallback?.title || "Oferta",
+    image: firstImage,
+    userId: snapshot?.userId || fallback?.userId || "",
+    userName: snapshot?.userName || fallback?.userName || "Usuario",
+  }
+}
+
+const mapTradeToExchange = (trade: BackendTrade, offerLookup: Map<string, Offer>): Exchange => {
+  const proposerSnapshot = parseOfferSnapshot(trade.proposerOfferJson)
+  const responderSnapshot = parseOfferSnapshot(trade.responderOfferJson)
+
+  const proposerOffer = offerLookup.get(proposerSnapshot.offerId) || offerLookup.get(proposerSnapshot.id || "")
+  const responderOffer = offerLookup.get(responderSnapshot.offerId) || offerLookup.get(responderSnapshot.id || "")
+
+  const proposer = pickSnapshotFallback(proposerSnapshot, proposerOffer)
+  const responder = pickSnapshotFallback(responderSnapshot, responderOffer)
+
+  let status = backendStatusMap[trade.status] || "pending"
+  if (trade.status === "PENDING" && (trade.proposerConfirmed || trade.responderConfirmed)) {
+    status = "accepted"
+  }
+
+  const exchange: Exchange = {
+    id: (trade._id || trade.id || "").toString(),
+    offerAId: proposer.id,
+    offerATitle: proposer.title,
+    offerAImage: proposerOffer?.images?.[0] || proposer.image,
+    userAId: trade.proposerId,
+    userAName: proposer.userName,
+    userAConfirmed: Boolean(trade.proposerConfirmed),
+    offerBId: responder.id,
+    offerBTitle: responder.title,
+    offerBImage: responderOffer?.images?.[0] || responder.image,
+    userBId: trade.responderId,
+    userBName: responder.userName,
+    userBConfirmed: Boolean(trade.responderConfirmed),
+    status,
+    message: trade.message || proposerSnapshot?.message || responderSnapshot?.message,
+    createdAt: trade.createdAt || new Date().toISOString(),
+    updatedAt: trade.updatedAt || trade.createdAt || new Date().toISOString(),
+    completedAt: trade.closedAt,
+  }
+
+  if (trade.status === "CANCELLED" && !trade.proposerConfirmed && !trade.responderConfirmed) {
+    exchange.status = "rejected"
+  }
+
+  return exchange
+}
+
 export function ExchangesProvider({ children }: { children: ReactNode }) {
   const [exchanges, setExchanges] = useState<Exchange[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const { token, user } = useAuth()
+  const offersContext = useOffers()
+
+  const offerLookup = useMemo(() => {
+    return new Map(offersContext.offers.map((offer: Offer) => [offer.id, offer]))
+  }, [offersContext.offers])
+
+  const refreshExchanges = useCallback(async () => {
+    if (!token || !user) {
+      setExchanges([])
+      setIsLoading(false)
+      return
+    }
+
+    setIsLoading(true)
+    try {
+      const data = await apiFetch<BackendTrade[]>("/trades/me", {
+        token,
+      })
+      const normalized = data.map((trade) => mapTradeToExchange(trade, offerLookup))
+      setExchanges(normalized)
+    } catch (error) {
+      console.error("Error fetching trades", error)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [token, user, offerLookup])
 
   useEffect(() => {
-    // Load exchanges from localStorage
-    const storedExchanges = localStorage.getItem("truequehub_exchanges")
-    if (storedExchanges) {
-      setExchanges(JSON.parse(storedExchanges))
-    }
-  }, [])
-
-  const saveExchanges = (updatedExchanges: Exchange[]) => {
-    setExchanges(updatedExchanges)
-    localStorage.setItem("truequehub_exchanges", JSON.stringify(updatedExchanges))
-  }
-
-  const proposeExchange = async (offerAId: string, offerBId: string, message?: string): Promise<string> => {
-    await new Promise((resolve) => setTimeout(resolve, 500))
-
-    // Get offer details from localStorage
-    const offersData = localStorage.getItem("truequehub_offers")
-    const offers = offersData ? JSON.parse(offersData) : []
-
-    const offerA = offers.find((o: Offer) => o.id === offerAId)
-    const offerB = offers.find((o: Offer) => o.id === offerBId)
-
-    if (!offerA || !offerB) {
-      throw new Error("Ofertas no encontradas")
+    if (!token || !user) {
+      setExchanges([])
+      setIsLoading(false)
+      return
     }
 
-    const newExchange: Exchange = {
-      id: Math.random().toString(36).substr(2, 9),
-      offerAId,
-      offerATitle: offerA.title,
-      offerAImage: offerA.images[0] || "/placeholder.svg",
-      userAId: offerA.userId,
-      userAName: offerA.userName,
-      userAConfirmed: false,
-      offerBId,
-      offerBTitle: offerB.title,
-      offerBImage: offerB.images[0] || "/placeholder.svg",
-      userBId: offerB.userId,
-      userBName: offerB.userName,
-      userBConfirmed: false,
-      status: "pending",
-      message,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }
+    void refreshExchanges()
+  }, [token, user, refreshExchanges])
 
-    const updatedExchanges = [...exchanges, newExchange]
-    saveExchanges(updatedExchanges)
-    return newExchange.id
-  }
+  const persistTrade = useCallback(
+    (trade: BackendTrade) => {
+      setExchanges((current: Exchange[]) => {
+        const normalized = mapTradeToExchange(trade, offerLookup)
+        const exists = current.some((exchange: Exchange) => exchange.id === normalized.id)
+        if (exists) {
+          return current.map((exchange: Exchange) => (exchange.id === normalized.id ? normalized : exchange))
+        }
+        return [normalized, ...current]
+      })
+    },
+    [offerLookup],
+  )
 
-  const acceptProposal = async (exchangeId: string) => {
-    await new Promise((resolve) => setTimeout(resolve, 500))
-
-    const updatedExchanges = exchanges.map((exchange) =>
-      exchange.id === exchangeId
-        ? { ...exchange, status: "accepted" as ExchangeStatus, updatedAt: new Date().toISOString() }
-        : exchange,
-    )
-    saveExchanges(updatedExchanges)
-  }
-
-  const rejectProposal = async (exchangeId: string) => {
-    await new Promise((resolve) => setTimeout(resolve, 500))
-
-    const updatedExchanges = exchanges.map((exchange) =>
-      exchange.id === exchangeId
-        ? { ...exchange, status: "rejected" as ExchangeStatus, updatedAt: new Date().toISOString() }
-        : exchange,
-    )
-    saveExchanges(updatedExchanges)
-  }
-
-  const confirmExchange = async (exchangeId: string, userId: string) => {
-    await new Promise((resolve) => setTimeout(resolve, 500))
-
-    const updatedExchanges = exchanges.map((exchange) => {
-      if (exchange.id !== exchangeId) return exchange
-
-      const isUserA = exchange.userAId === userId
-      const isUserB = exchange.userBId === userId
-
-      if (!isUserA && !isUserB) return exchange
-
-      const updatedExchange = {
-        ...exchange,
-        userAConfirmed: isUserA ? true : exchange.userAConfirmed,
-        userBConfirmed: isUserB ? true : exchange.userBConfirmed,
-        updatedAt: new Date().toISOString(),
+  const proposeExchange = useCallback(
+    async (offerAId: string, offerBId: string, message?: string) => {
+      if (!token || !user) {
+        throw new Error("Debes iniciar sesión para proponer un trueque")
       }
 
-      // If both users confirmed, mark as completed
-      if (updatedExchange.userAConfirmed && updatedExchange.userBConfirmed) {
-        updatedExchange.status = "completed"
-        updatedExchange.completedAt = new Date().toISOString()
+      await offersContext.ensureOfferLoaded(offerAId)
+      await offersContext.ensureOfferLoaded(offerBId)
+
+      const offerA = offersContext.getOfferById(offerAId)
+      const offerB = offersContext.getOfferById(offerBId)
+
+      if (!offerA || !offerB) {
+        throw new Error("Ofertas no encontradas")
       }
 
-      return updatedExchange
-    })
+      const payload = {
+        proposerId: offerA.userId,
+        responderId: offerB.userId,
+        proposerOfferJson: JSON.stringify({
+          offerId: offerA.id,
+          title: offerA.title,
+          image: offerA.images[0],
+          userId: offerA.userId,
+          userName: offerA.userName,
+          message,
+        }),
+        responderOfferJson: JSON.stringify({
+          offerId: offerB.id,
+          title: offerB.title,
+          image: offerB.images[0],
+          userId: offerB.userId,
+          userName: offerB.userName,
+        }),
+      }
 
-    saveExchanges(updatedExchanges)
-  }
+      const created = await apiFetch<BackendTrade>("/trades", {
+        method: "POST",
+        body: payload,
+        token,
+      })
 
-  const cancelExchange = async (exchangeId: string) => {
-    await new Promise((resolve) => setTimeout(resolve, 500))
+      persistTrade(created)
+      return (created._id || created.id || "").toString()
+    },
+    [token, user, offersContext, persistTrade],
+  )
 
-    const updatedExchanges = exchanges.map((exchange) =>
-      exchange.id === exchangeId
-        ? { ...exchange, status: "cancelled" as ExchangeStatus, updatedAt: new Date().toISOString() }
-        : exchange,
-    )
-    saveExchanges(updatedExchanges)
-  }
+  const mutateTradeDecision = useCallback(
+    async (exchangeId: string, accept: boolean) => {
+      if (!token || !user) {
+        throw new Error("Debes iniciar sesión para gestionar trueques")
+      }
 
-  const getUserExchanges = (userId: string) => {
-    return exchanges.filter((exchange) => exchange.userAId === userId || exchange.userBId === userId)
-  }
+      const updated = await apiFetch<BackendTrade>(`/trades/${exchangeId}/confirm`, {
+        method: "POST",
+        token,
+        body: { userId: user.id, accept },
+      })
 
-  const getIncomingProposals = (userId: string) => {
-    return exchanges.filter((exchange) => exchange.userBId === userId && exchange.status === "pending")
-  }
+      persistTrade(updated)
+    },
+    [token, user, persistTrade],
+  )
 
-  const getOutgoingProposals = (userId: string) => {
-    return exchanges.filter((exchange) => exchange.userAId === userId && exchange.status === "pending")
-  }
+  const acceptProposal = useCallback(
+    async (exchangeId: string) => {
+      await mutateTradeDecision(exchangeId, true)
+    },
+    [mutateTradeDecision],
+  )
 
-  const getCompletedExchanges = (userId: string) => {
-    return exchanges.filter(
-      (exchange) => (exchange.userAId === userId || exchange.userBId === userId) && exchange.status === "completed",
-    )
-  }
+  const rejectProposal = useCallback(
+    async (exchangeId: string) => {
+      await mutateTradeDecision(exchangeId, false)
+    },
+    [mutateTradeDecision],
+  )
 
-  const getPendingConfirmations = (userId: string) => {
-    return exchanges.filter((exchange) => {
-      if (exchange.status !== "accepted") return false
-      const isUserA = exchange.userAId === userId
-      const isUserB = exchange.userBId === userId
-      if (!isUserA && !isUserB) return false
+  const confirmExchange = useCallback(
+    async (exchangeId: string) => {
+      await mutateTradeDecision(exchangeId, true)
+    },
+    [mutateTradeDecision],
+  )
 
-      // Show if user hasn't confirmed yet
-      if (isUserA && !exchange.userAConfirmed) return true
-      if (isUserB && !exchange.userBConfirmed) return true
+  const cancelExchange = useCallback(
+    async (exchangeId: string) => {
+      await mutateTradeDecision(exchangeId, false)
+    },
+    [mutateTradeDecision],
+  )
 
-      return false
-    })
-  }
+  const getUserExchanges = useCallback(
+    (userId: string) => exchanges.filter((exchange: Exchange) => exchange.userAId === userId || exchange.userBId === userId),
+    [exchanges],
+  )
+
+  const getIncomingProposals = useCallback(
+    (userId: string) =>
+      exchanges.filter((exchange: Exchange) => exchange.userBId === userId && exchange.status === "pending"),
+    [exchanges],
+  )
+
+  const getOutgoingProposals = useCallback(
+    (userId: string) =>
+      exchanges.filter((exchange: Exchange) => exchange.userAId === userId && exchange.status === "pending"),
+    [exchanges],
+  )
+
+  const getCompletedExchanges = useCallback(
+    (userId: string) =>
+      exchanges.filter(
+        (exchange: Exchange) => (exchange.userAId === userId || exchange.userBId === userId) && exchange.status === "completed",
+      ),
+    [exchanges],
+  )
+
+  const getPendingConfirmations = useCallback(
+    (userId: string) =>
+      exchanges.filter((exchange: Exchange) => {
+        if (exchange.status !== "accepted") return false
+        const isUserA = exchange.userAId === userId
+        const isUserB = exchange.userBId === userId
+        if (!isUserA && !isUserB) return false
+        if (isUserA && !exchange.userAConfirmed) return true
+        if (isUserB && !exchange.userBConfirmed) return true
+        return false
+      }),
+    [exchanges],
+  )
 
   return (
     <ExchangesContext.Provider
       value={{
         exchanges,
+        isLoading,
+        refreshExchanges,
         proposeExchange,
         acceptProposal,
         rejectProposal,

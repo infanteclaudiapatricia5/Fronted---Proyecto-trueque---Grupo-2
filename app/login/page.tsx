@@ -12,12 +12,14 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Package, Loader2, Mail, Lock, ArrowLeft } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { useToast } from "@/hooks/use-toast"
+import { useRecaptcha } from "@/hooks/use-recaptcha"
 
 export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const { login } = useAuth()
+  const { getToken } = useRecaptcha()
   const router = useRouter()
   const { toast } = useToast()
 
@@ -26,7 +28,8 @@ export default function LoginPage() {
     setIsLoading(true)
 
     try {
-      await login(email, password)
+      const recaptchaToken = await getToken("login")
+      await login(email, password, recaptchaToken)
       toast({
         title: "¡Bienvenido de vuelta!",
         description: "Has iniciado sesión correctamente.",
@@ -123,6 +126,28 @@ export default function LoginPage() {
                 "Iniciar Sesión"
               )}
             </Button>
+
+            <p className="text-xs text-center text-muted-foreground">
+              Este sitio está protegido por reCAPTCHA y aplican la{" "}
+              <a
+                href="https://policies.google.com/privacy"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                Política de Privacidad
+              </a>{" "}
+              y los{" "}
+              <a
+                href="https://policies.google.com/terms"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                Términos de Servicio
+              </a>{" "}
+              de Google.
+            </p>
 
             <div className="relative w-full">
               <div className="absolute inset-0 flex items-center">
