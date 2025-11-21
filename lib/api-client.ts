@@ -2,8 +2,9 @@
 
 const DEFAULT_BASE_URL = "http://localhost:3000"
 const runtimeEnv =
-  (typeof globalThis !== "undefined" && (globalThis as any)?.process?.env?.NEXT_PUBLIC_API_BASE_URL) ||
-  (typeof window !== "undefined" && (window as any)?.NEXT_PUBLIC_API_BASE_URL) ||
+  (typeof globalThis !== "undefined" && (globalThis as any)?.process?.env?.NEXT_PUBLIC_API_URL) ||
+  (typeof window !== "undefined" && (window as any)?.NEXT_PUBLIC_API_URL) ||
+  process.env.NEXT_PUBLIC_API_URL ||
   undefined
 const baseUrl = runtimeEnv || DEFAULT_BASE_URL
 
