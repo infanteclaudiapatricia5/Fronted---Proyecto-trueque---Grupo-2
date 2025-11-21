@@ -5,24 +5,6 @@ Este README documenta todos los pasos necesarios para instalar, ejecutar y compr
 
 ---
 
-# 1. Requisitos previos
-
-Antes de iniciar, asegúrate de tener instaladas las siguientes herramientas:
-
-## Node.js (versión 18 o superior)
-Descargar desde:
-https://nodejs.org
-
-Incluye:
-- node
-- npm
-
-## PNPM (gestor de paquetes utilizado por el proyecto)
-Instalación global:
-npm install -g pnpm
-
----
-
 # Requisitos previos
 
 Antes de instalar el proyecto, asegúrate de tener lo siguiente:
